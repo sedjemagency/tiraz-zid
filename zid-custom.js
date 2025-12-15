@@ -1,9 +1,8 @@
 /* ======================================================
-   zid-custom.js (Sedjem)
-   SPA-safe (works after navigating then coming back)
-   - HERO slider fix (Tablet 640–1023)
-   - Collections slider: continuous autoplay + speed (always re-applies)
-   - URGENCY / STOCK under "رمز المنتج" using product.low_stock_quantity
+   zid-custom.js (Sedjem) — SPA Safe
+   1) HERO slider fix (Tablet 640–1023)  ✅ (already works)
+   2) COLLECTIONS slider continuous autoplay ✅ (fixed after navigation)
+   3) URGENCY / STOCK under "رمز المنتج" ✅ (product.low_stock_quantity)
    ====================================================== */
 
 (function () {
@@ -13,16 +12,10 @@
   /* -----------------------------
      Helpers
   ----------------------------- */
-  function qs(sel, root) {
-    return (root || document).querySelector(sel);
-  }
-  function qsa(sel, root) {
-    return (root || document).querySelectorAll(sel);
-  }
-  function safeNum(x) {
-    var n = Number(x);
-    return isFinite(n) ? n : null;
-  }
+  function qs(sel, root) { return (root || document).querySelector(sel); }
+  function qsa(sel, root) { return (root || document).querySelectorAll(sel); }
+  function safeNum(x) { var n = Number(x); return isFinite(n) ? n : null; }
+
   function debounce(fn, wait) {
     var t;
     return function () {
@@ -32,26 +25,29 @@
     };
   }
 
-  // SPA navigation hooks (Zid-like)
-  function hookNavigation(onChange) {
+  // SPA navigation hooks (covers Zid “navigate then back”)
+  function hookSPA(onChange) {
     var fire = debounce(onChange, 120);
 
-    // history changes
+    // history hooks
     try {
       var _push = history.pushState;
-      history.pushState = function () {
-        var r = _push.apply(this, arguments);
-        fire();
-        return r;
-      };
+      history.pushState = function () { var r = _push.apply(this, arguments); fire(); return r; };
+
       var _replace = history.replaceState;
-      history.replaceState = function () {
-        var r = _replace.apply(this, arguments);
-        fire();
-        return r;
-      };
+      history.replaceState = function () { var r = _replace.apply(this, arguments); fire(); return r; };
+
       window.addEventListener("popstate", fire);
     } catch (e) {}
+
+    // URL polling (some routers don’t use history methods consistently)
+    var lastHref = location.href;
+    setInterval(function () {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        fire();
+      }
+    }, 300);
 
     // DOM swaps
     if (window.MutationObserver) {
@@ -65,10 +61,23 @@
     fire();
   }
 
+  function runGuard(fn, times, step) {
+    fn();
+    var n = 0;
+    var iv = setInterval(function () {
+      fn();
+      n++;
+      if (n >= times) clearInterval(iv);
+    }, step);
+  }
+
   /* ======================================================
-     START: HERO SLIDER FIX (Tablet 640–1023)
+     1) HERO SLIDER FIX (Tablet 640–1023)
      ====================================================== */
   (function () {
+    if (window.__HERO_MEDIA_SLIDER_FIX__) return;
+    window.__HERO_MEDIA_SLIDER_FIX__ = "loaded_" + Date.now();
+
     var MIN = 640;
     var MAX = 1023;
 
@@ -127,39 +136,32 @@
       }
     }
 
-    // IMPORTANT: keep re-applying (Zid SPA resets sliders)
-    function start() {
-      ensureHero();
-      clearInterval(start.__iv);
-      start.__iv = setInterval(ensureHero, 350);
-    }
+    function start() { runGuard(ensureHero, 30, 200); }
 
     window.addEventListener("resize", debounce(start, 150));
     window.addEventListener("orientationchange", function () { setTimeout(start, 250); });
-
-    hookNavigation(start);
+    hookSPA(start);
   })();
-  /* ======================================================
-     END: HERO SLIDER FIX
-     ====================================================== */
 
   /* ======================================================
-     START: COLLECTIONS SLIDER (Speed + Continuous Autoplay)
+     2) COLLECTIONS SLIDER (Speed + Continuous Autoplay)
+     FIX: don’t depend on the GUID section-id
+     Target: any section-id starting with "slider-with-background-image"
      ====================================================== */
   (function () {
-    var SECTION_ID = "slider-with-background-image-15e9c1d4-155b-4592-90c3-181634cf6d66";
+    if (window.__SEDJEM_COLLECTIONS_FIX__) return;
+    window.__SEDJEM_COLLECTIONS_FIX__ = true;
 
-    function getEl() {
-      var section = qs('section[section-id="' + SECTION_ID + '"]');
-      if (!section) return null;
-      return section.querySelector("swiper-container, swiper-container-1");
-    }
+    // Targets ALL “slider-with-background-image-*” sections (home sliders)
+    var COL_SEL =
+      'section[section-id^="slider-with-background-image"] swiper-container,' +
+      'section[section-id^="slider-with-background-image"] swiper-container-1';
 
-    function forceContinuous(sw) {
+    function patchCollections(sw) {
       if (!sw || sw.destroyed) return;
 
       try {
-        // Always force (because theme may overwrite after navigation)
+        // Force continuous autoplay
         sw.params.speed = 5000;
 
         sw.params.autoplay = sw.params.autoplay || {};
@@ -172,30 +174,31 @@
     }
 
     function ensureCollections() {
-      var el = getEl();
-      if (!el) return;
+      var els = qsa(COL_SEL);
+      if (!els || !els.length) return;
 
-      try {
-        if (!el.swiper && typeof el.initialize === "function") el.initialize();
-        if (el.swiper) forceContinuous(el.swiper);
-      } catch (e) {}
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        try {
+          if (!el.swiper && typeof el.initialize === "function") el.initialize();
+          if (el.swiper) patchCollections(el.swiper);
+        } catch (e) {}
+      }
     }
 
     function start() {
-      ensureCollections();
-      clearInterval(start.__iv);
-      start.__iv = setInterval(ensureCollections, 350);
+      // IMPORTANT: after navigating back to home, Zid recreates swipers later,
+      // so we must retry for a few seconds.
+      runGuard(ensureCollections, 40, 250);
     }
 
-    hookNavigation(start);
+    hookSPA(start);
   })();
-  /* ======================================================
-     END: COLLECTIONS SLIDER
-     ====================================================== */
 
   /* ======================================================
-     START: URGENCY / STOCK (UNDER "رمز المنتج")
-     Uses product.low_stock_quantity (Zid official pattern)
+     3) URGENCY / STOCK under "رمز المنتج" (.div-product-sku)
+     Uses product.low_stock_quantity (Zid “Remaining Product Stock” field)
+     Fallback: sum stocks.quantity / stocks.available_quantity
      ====================================================== */
   (function () {
     if (window.__SEDJEM_URGENCY_STOCK__) return;
@@ -205,13 +208,9 @@
       boxId: "zid-urgency-stock",
       title: "المتبقي في المخزون",
       unit: "قطعة",
-      threshold: 5,
-      showOnlyWhenLow: true
+      threshold: 5,          // used only if we must fallback to stocks
+      showOnlyWhenLow: true  // fallback only (low_stock_quantity is already “low”)
     };
-
-    function findSkuBlock() {
-      return qs(".div-product-sku");
-    }
 
     function getProductId() {
       var el = qs("#product-id");
@@ -219,7 +218,7 @@
     }
 
     function ensureBox() {
-      var sku = findSkuBlock();
+      var sku = qs(".div-product-sku");
       if (!sku) return null;
 
       var box = document.getElementById(CFG.boxId);
@@ -228,132 +227,124 @@
         box.id = CFG.boxId;
         box.className = "mt-4";
         box.style.display = "none";
-        box.innerHTML =
-          '<h4 class="product-title"></h4>' +
-          '<div class="product-stock"></div>';
+        box.innerHTML = '<h4 class="product-title"></h4><div class="product-stock"></div>';
         sku.insertAdjacentElement("afterend", box);
       }
       return box;
     }
 
-    function setBox(box, qty) {
+    function showBox(box, qty) {
       if (!box) return;
 
       var q = Math.max(0, Math.floor(qty || 0));
-
-      if (!q) {
-        box.style.display = "none";
-        return;
-      }
-
-      if (CFG.showOnlyWhenLow && q > CFG.threshold) {
-        box.style.display = "none";
-        return;
-      }
+      if (!q) { box.style.display = "none"; return; }
 
       box.style.display = "";
-      var t = qs(".product-title", box);
-      var v = qs(".product-stock", box);
-      if (t) t.textContent = CFG.title;
-      if (v) v.textContent = q + (CFG.unit ? " " + CFG.unit : "");
+      qs(".product-title", box).textContent = CFG.title;
+      qs(".product-stock", box).textContent = q + (CFG.unit ? " " + CFG.unit : "");
     }
 
-    function readLowStockFromAny(productLike) {
-      if (!productLike) return null;
-      var v = safeNum(productLike.low_stock_quantity);
-      return v;
+    function hideBox(box) {
+      if (box) box.style.display = "none";
     }
 
     function hasZidSDK() {
       return !!(window.zid && zid.store && zid.store.product && typeof zid.store.product.get === "function");
     }
 
-    function fetchViaSDK(pid) {
-      return zid.store.product.get(pid).then(function (product) {
-        // Zid “Remaining Product Stock” is reflected as product.low_stock_quantity
-        // (not stocks[]) when the merchant enables it.
-        return readLowStockFromAny(product);
+    function sumStocks(stocks) {
+      if (!stocks || !stocks.length) return null;
+
+      for (var i = 0; i < stocks.length; i++) {
+        if (stocks[i] && stocks[i].is_infinite === true) return null;
+      }
+
+      var sum = 0;
+      for (var j = 0; j < stocks.length; j++) {
+        var s = stocks[j];
+        if (!s) continue;
+
+        // Zid stock objects differ: sometimes quantity, sometimes available_quantity
+        var q = safeNum(s.available_quantity);
+        if (q === null) q = safeNum(s.quantity);
+
+        if (q !== null) sum += q;
+      }
+
+      return sum;
+    }
+
+    var lastPid = null;
+    var lastFetchAt = 0;
+    var cachedQty = null;
+
+    function fetchAndRender(pid, box) {
+      // prevent spamming
+      var now = Date.now();
+      if (pid === lastPid && (now - lastFetchAt) < 2500 && cachedQty !== null) {
+        showBox(box, cachedQty);
+        return;
+      }
+      if ((now - lastFetchAt) < 1500 && pid === lastPid) return;
+
+      lastPid = pid;
+      lastFetchAt = now;
+
+      zid.store.product.get(pid).then(function (product) {
+        // 1) Preferred: Remaining stock field
+        var low = safeNum(product && product.low_stock_quantity);
+        if (low !== null && low > 0) {
+          cachedQty = low;
+          showBox(box, low);
+          return;
+        }
+
+        // 2) Fallback: sum stocks if exposed
+        var sum = sumStocks(product && product.stocks);
+        if (sum !== null && sum > 0) {
+          // apply your threshold rule only for fallback
+          if (CFG.showOnlyWhenLow && sum > CFG.threshold) {
+            cachedQty = null;
+            hideBox(box);
+          } else {
+            cachedQty = sum;
+            showBox(box, sum);
+          }
+          return;
+        }
+
+        cachedQty = null;
+        hideBox(box);
+      }).catch(function () {
+        cachedQty = null;
+        hideBox(box);
       });
     }
 
     function render() {
-      var pid = getProductId();
-      var sku = findSkuBlock();
-      if (!pid || !sku) return;
-
       var box = ensureBox();
       if (!box) return;
 
-      // 1) SDK (preferred)
-      if (hasZidSDK()) {
-        fetchViaSDK(pid)
-          .then(function (qty) {
-            if (qty === null || qty === undefined) {
-              // 2) fallback: sometimes theme already has product object somewhere
-              var q2 =
-                readLowStockFromAny(window.productObj) ||
-                readLowStockFromAny(window.selectedProduct) ||
-                readLowStockFromAny(window.selected_product);
-              setBox(box, q2);
-              return;
-            }
-            setBox(box, qty);
-          })
-          .catch(function () {
-            var qf =
-              readLowStockFromAny(window.productObj) ||
-              readLowStockFromAny(window.selectedProduct) ||
-              readLowStockFromAny(window.selected_product);
-            setBox(box, qf);
-          });
+      var pid = getProductId();
+      if (!pid) { hideBox(box); return; }
 
-        return;
-      }
+      if (!hasZidSDK()) { hideBox(box); return; }
 
-      // fallback only
-      var q =
-        readLowStockFromAny(window.productObj) ||
-        readLowStockFromAny(window.selectedProduct) ||
-        readLowStockFromAny(window.selected_product);
-      setBox(box, q);
+      fetchAndRender(pid, box);
     }
 
     function start() {
-      // keep re-running (product page content may be injected after navigation)
-      render();
-      clearInterval(start.__iv);
-      start.__iv = setInterval(function () {
-        // only try when on product page
-        if (document.getElementById("productPageDetails") && document.getElementById("product-id")) render();
-      }, 500);
+      // Product page content may render late after navigation
+      runGuard(render, 30, 250);
     }
 
-    // Wrap variant change functions if present
-    function wrap(fnName) {
-      if (typeof window[fnName] !== "function" || window[fnName].__sedjemWrapped) return;
-      var old = window[fnName];
-      window[fnName] = function () {
-        var res = old.apply(this, arguments);
-        setTimeout(start, 200);
-        return res;
-      };
-      window[fnName].__sedjemWrapped = true;
-    }
-    wrap("productOptionsChanged");
-    wrap("productOptionInputChanged");
-
-    // Debug helper (use: __zidDebugStock())
+    // Debug helper
     window.__zidDebugStock = function () {
-      console.log("[Stock] productId:", getProductId());
+      console.log("[Stock] pid:", getProductId());
       console.log("[Stock] hasZidSDK:", hasZidSDK());
-      console.log("[Stock] productObj.low_stock_quantity:", window.productObj && window.productObj.low_stock_quantity);
-      console.log("[Stock] selectedProduct.low_stock_quantity:", window.selectedProduct && window.selectedProduct.low_stock_quantity);
       start();
     };
 
-    hookNavigation(start);
+    hookSPA(start);
   })();
-  /* ======================================================
-     END: URGENCY / STOCK
-     ====================================================== */
 })();
