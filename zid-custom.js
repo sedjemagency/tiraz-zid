@@ -90,6 +90,7 @@ window.__HERO_MEDIA_SLIDER_FIX__ = "loaded_" + Date.now();
 
 
 
+
 /* ======================================================
    START: COLLECTIONS SLIDER (Speed + Continuous Autoplay)
    ====================================================== */
@@ -114,9 +115,7 @@ document.addEventListener("DOMContentLoaded", function () {
       s.params.autoplay.disableOnInteraction = false;
 
       if (typeof s.update === "function") s.update();
-      if (s.autoplay && typeof s.autoplay.start === "function") {
-        s.autoplay.start();
-      }
+      if (s.autoplay && typeof s.autoplay.start === "function") s.autoplay.start();
 
       return true;
     } catch (e) {
@@ -137,19 +136,34 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 
+
 /* ======================================================
-   START: URGENCY / STOCK (Zid SDK – GUARANTEED)
-   Position: Under "رمز المنتج"
+   START: URGENCY / STOCK (SAFE: SDK first, fallback second)
+   Position: Under "رمز المنتج" (.div-product-sku)
    ====================================================== */
 (function () {
-  if (window.__ZID_URGENCY_STOCK_SDK__) return;
-  window.__ZID_URGENCY_STOCK_SDK__ = true;
+  if (window.__ZID_URGENCY_STOCK__) return;
+  window.__ZID_URGENCY_STOCK__ = true;
 
-  var BOX_ID = "zid-urgency-stock";
-  var TITLE_TEXT = "الكمية المتوفرة";
+  var CFG = {
+    boxId: "zid-urgency-stock",
+    title: "المتبقي في المخزون",
+    unit: "قطعة",
+    threshold: 5,
+    showOnlyWhenLow: true
+  };
 
   function qs(sel, root) {
     return (root || document).querySelector(sel);
+  }
+
+  function isArray(x) {
+    return Object.prototype.toString.call(x) === "[object Array]";
+  }
+
+  function safeNum(x) {
+    var n = Number(x);
+    return isFinite(n) ? n : 0;
   }
 
   function getProductId() {
@@ -162,35 +176,111 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function ensureBox(skuBlock) {
-    var box = document.getElementById(BOX_ID);
+    var box = document.getElementById(CFG.boxId);
     if (box) return box;
 
     box = document.createElement("div");
-    box.id = BOX_ID;
+    box.id = CFG.boxId;
     box.className = "mt-4";
-    box.innerHTML =
-      '<h4 class="product-title"></h4>' +
-      '<div class="product-sku"></div>';
-
+    box.innerHTML = '<h4 class="product-title"></h4><div class="product-stock"></div>';
     skuBlock.insertAdjacentElement("afterend", box);
     return box;
   }
 
-  function extractQty(product) {
-    if (!product || !Array.isArray(product.stocks)) return null;
+  function showBox(box, qty) {
+    if (!box) return;
 
-    var total = 0;
-    for (var i = 0; i < product.stocks.length; i++) {
-      var s = product.stocks[i];
-      if (!s) continue;
-      if (s.is_infinite === true) return null;
-      if (typeof s.available_quantity === "number") {
-        total += s.available_quantity;
-      }
+    var q = Math.max(0, Math.floor(qty || 0));
+
+    if (CFG.showOnlyWhenLow && q > CFG.threshold) {
+      box.style.display = "none";
+      return;
     }
-    return total > 0 ? total : null;
+
+    box.style.display = "";
+    var t = qs(".product-title", box);
+    var v = qs(".product-stock", box);
+
+    if (t) t.textContent = CFG.title;
+    if (v) v.textContent = q + (CFG.unit ? " " + CFG.unit : "");
   }
 
+  function hideBox(box) {
+    if (box) box.style.display = "none";
+  }
+
+  // ---------- SDK path ----------
+  function hasZidSDK() {
+    return !!(window.zid && zid.store && zid.store.product && typeof zid.store.product.get === "function");
+  }
+
+  function sdkFetchQty(productId) {
+    return zid.store.product.get(productId).then(function (product) {
+      if (!product || !isArray(product.stocks)) return null;
+
+      var total = 0;
+      for (var i = 0; i < product.stocks.length; i++) {
+        var s = product.stocks[i];
+        if (!s) continue;
+        if (s.is_infinite === true) return null;
+        total += safeNum(s.available_quantity);
+      }
+      return total;
+    });
+  }
+
+  // ---------- Fallback path (window.productObj / selectedProduct) ----------
+  function getSelectedProduct() {
+    if (window.selectedProduct) return window.selectedProduct;
+    if (window.selected_product) return window.selected_product;
+
+    if (window.productObj) {
+      if (window.productObj.selected_product) return window.productObj.selected_product;
+      if (window.productObj.selectedProduct) return window.productObj.selectedProduct;
+    }
+    return null;
+  }
+
+  function computeFromStocks(stocks) {
+    if (!isArray(stocks) || !stocks.length) return null;
+
+    for (var i = 0; i < stocks.length; i++) {
+      if (stocks[i] && stocks[i].is_infinite) return null;
+    }
+
+    var sum = 0;
+    for (var j = 0; j < stocks.length; j++) {
+      if (stocks[j]) sum += safeNum(stocks[j].available_quantity);
+    }
+
+    return sum;
+  }
+
+  function fallbackQty() {
+    var selected = getSelectedProduct();
+
+    if (selected && isArray(selected.stocks)) {
+      return computeFromStocks(selected.stocks);
+    }
+
+    if (window.productObj && isArray(window.productObj.stocks)) {
+      return computeFromStocks(window.productObj.stocks);
+    }
+
+    var pid = getProductId();
+    if (pid && window.productObj && isArray(window.productObj.products)) {
+      for (var i = 0; i < window.productObj.products.length; i++) {
+        var p = window.productObj.products[i];
+        if (p && String(p.id) === String(pid) && isArray(p.stocks)) {
+          return computeFromStocks(p.stocks);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // ---------- Render ----------
   function render() {
     var skuBlock = findSkuBlock();
     var productId = getProductId();
@@ -198,36 +288,109 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var box = ensureBox(skuBlock);
 
-    zid.store.product.get(productId).then(function (product) {
-      var qty = extractQty(product);
+    // Prefer SDK (when available)
+    if (hasZidSDK()) {
+      sdkFetchQty(productId)
+        .then(function (qty) {
+          if (qty === null || qty === undefined) return hideBox(box);
+          if (qty <= 0) return hideBox(box);
+          showBox(box, qty);
+        })
+        .catch(function () {
+          // If SDK fails, fallback (do not crash)
+          var q2 = fallbackQty();
+          if (!q2 || q2 <= 0) return hideBox(box);
+          showBox(box, q2);
+        });
 
-      if (!qty) {
-        box.style.display = "none";
-        return;
-      }
+      return;
+    }
 
-      box.style.display = "";
-      box.querySelector(".product-title").textContent = TITLE_TEXT;
-      box.querySelector(".product-sku").textContent = qty;
+    // Fallback only
+    var qtyFallback = fallbackQty();
+    if (!qtyFallback || qtyFallback <= 0) return hideBox(box);
+    showBox(box, qtyFallback);
+  }
+
+  // ---------- Updates / Hooks ----------
+  var rafPending = false;
+  function scheduleRender() {
+    if (rafPending) return;
+    rafPending = true;
+    (window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); })(function () {
+      rafPending = false;
+      render();
     });
   }
 
+  function hookVariantChanges() {
+    // common Zid templates
+    var fnNames = ["productOptionsChanged", "productOptionInputChanged"];
+    for (var i = 0; i < fnNames.length; i++) {
+      var name = fnNames[i];
+      if (typeof window[name] === "function" && !window[name].__sedjemWrapped) {
+        (function (n) {
+          var old = window[n];
+          window[n] = function () {
+            var res = old.apply(this, arguments);
+            setTimeout(scheduleRender, 200);
+            return res;
+          };
+          window[n].__sedjemWrapped = true;
+        })(name);
+      }
+    }
+
+    // product-id changes
+    var pid = document.getElementById("product-id");
+    if (pid) {
+      pid.addEventListener("change", function () { scheduleRender(); });
+
+      if (window.MutationObserver) {
+        try {
+          var obs = new MutationObserver(function () { scheduleRender(); });
+          obs.observe(pid, { attributes: true, attributeFilter: ["value"] });
+        } catch (e) {}
+      }
+    }
+  }
+
+  // Debug helper (always exists)
+  window.__zidDebugStock = function () {
+    console.log("[Stock] hasZidSDK:", hasZidSDK());
+    console.log("[Stock] productId:", getProductId());
+    console.log("[Stock] selectedProduct:", getSelectedProduct());
+    console.log("[Stock] productObj:", window.productObj);
+    render();
+  };
+
   function start() {
+    hookVariantChanges();
+
+    // SKU block can appear late
+    if (window.MutationObserver) {
+      var root = document.getElementById("productPageDetails") || document.body;
+      if (root) {
+        try {
+          var obs2 = new MutationObserver(function () {
+            if (document.querySelector(".div-product-sku")) scheduleRender();
+          });
+          obs2.observe(root, { childList: true, subtree: true });
+        } catch (e) {}
+      }
+    }
+
+    scheduleRender();
+    setTimeout(scheduleRender, 500);
+    setTimeout(scheduleRender, 1500);
+
+    // If SDK loads late, re-render a few times
     var tries = 0;
     var iv = setInterval(function () {
       tries++;
-      render();
-      if (tries > 20) clearInterval(iv);
+      scheduleRender();
+      if (tries >= 20) clearInterval(iv);
     }, 300);
-
-    // Re-render on variant change
-    if (typeof window.productOptionInputChanged === "function") {
-      var old = window.productOptionInputChanged;
-      window.productOptionInputChanged = function () {
-        old.apply(this, arguments);
-        setTimeout(render, 300);
-      };
-    }
   }
 
   if (document.readyState === "loading") {
