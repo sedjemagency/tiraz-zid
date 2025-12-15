@@ -138,12 +138,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 /* ======================================================
-   START: URGENCY / STOCK (Zid – API Based)
+   START: URGENCY / STOCK (Zid SDK – GUARANTEED)
    Position: Under "رمز المنتج"
    ====================================================== */
 (function () {
-  if (window.__ZID_URGENCY_STOCK_API__) return;
-  window.__ZID_URGENCY_STOCK_API__ = true;
+  if (window.__ZID_URGENCY_STOCK_SDK__) return;
+  window.__ZID_URGENCY_STOCK_SDK__ = true;
 
   var BOX_ID = "zid-urgency-stock";
   var TITLE_TEXT = "الكمية المتوفرة";
@@ -152,69 +152,55 @@ document.addEventListener("DOMContentLoaded", function () {
     return (root || document).querySelector(sel);
   }
 
-  function findSkuBlock() {
-    return qs(".div-product-sku");
-  }
-
   function getProductId() {
     var el = qs("#product-id");
     return el && el.value ? el.value : null;
+  }
+
+  function findSkuBlock() {
+    return qs(".div-product-sku");
   }
 
   function ensureBox(skuBlock) {
     var box = document.getElementById(BOX_ID);
     if (box) return box;
 
-    var valueClass = "product-sku";
-
     box = document.createElement("div");
     box.id = BOX_ID;
     box.className = "mt-4";
     box.innerHTML =
       '<h4 class="product-title"></h4>' +
-      '<div class="' + valueClass + '"></div>';
+      '<div class="product-sku"></div>';
 
     skuBlock.insertAdjacentElement("afterend", box);
     return box;
   }
 
-  function fetchStock(productId) {
-    return fetch("/api/v1/products/" + productId, {
-      credentials: "same-origin"
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error("API error");
-        return r.json();
-      })
-      .then(function (data) {
-        if (!data || !Array.isArray(data.stocks)) return null;
+  function extractQty(product) {
+    if (!product || !Array.isArray(product.stocks)) return null;
 
-        var total = 0;
-        for (var i = 0; i < data.stocks.length; i++) {
-          var s = data.stocks[i];
-          if (!s) continue;
-          if (s.is_infinite === true) return null;
-          if (typeof s.available_quantity === "number") {
-            total += s.available_quantity;
-          }
-        }
-        return total > 0 ? total : null;
-      })
-      .catch(function () {
-        return null;
-      });
+    var total = 0;
+    for (var i = 0; i < product.stocks.length; i++) {
+      var s = product.stocks[i];
+      if (!s) continue;
+      if (s.is_infinite === true) return null;
+      if (typeof s.available_quantity === "number") {
+        total += s.available_quantity;
+      }
+    }
+    return total > 0 ? total : null;
   }
 
   function render() {
     var skuBlock = findSkuBlock();
-    if (!skuBlock) return;
-
     var productId = getProductId();
-    if (!productId) return;
+    if (!skuBlock || !productId) return;
 
     var box = ensureBox(skuBlock);
 
-    fetchStock(productId).then(function (qty) {
+    zid.store.product.get(productId).then(function (product) {
+      var qty = extractQty(product);
+
       if (!qty) {
         box.style.display = "none";
         return;
@@ -222,7 +208,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
       box.style.display = "";
       box.querySelector(".product-title").textContent = TITLE_TEXT;
-      box.querySelector("div").textContent = qty;
+      box.querySelector(".product-sku").textContent = qty;
     });
   }
 
@@ -231,7 +217,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var iv = setInterval(function () {
       tries++;
       render();
-      if (tries > 30) clearInterval(iv);
+      if (tries > 20) clearInterval(iv);
     }, 300);
 
     // Re-render on variant change
