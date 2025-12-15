@@ -1,222 +1,170 @@
 /* ======================================================
-   Sedjem Zid Custom Tweaks (SPA/PJAX Safe)
-   - HERO fix (tablet 640–1023)
-   - Collections autoplay speed
-   - Product urgency/remaining stock under SKU
+   Sedjem Zid Custom Tweaks (Navigation-proof)
+   - HERO Swiper fix (tablet 640–1023)
+   - Collections Swiper continuous autoplay (speed + no delay)
+   - URGENCY / STOCK under SKU (robust, multi-source)
    ====================================================== */
 
 (function () {
-  if (window.__SEDJEM_ZID_TWEAKS_V1__) return;
-  window.__SEDJEM_ZID_TWEAKS_V1__ = true;
+  if (window.__SEDJEM_ZID_CUSTOM_ALL__) return;
+  window.__SEDJEM_ZID_CUSTOM_ALL__ = "loaded_" + Date.now();
 
-  /* ----------------------------
-     Small utilities
-  ---------------------------- */
+  /* -----------------------------
+     Helpers
+  ----------------------------- */
   function qs(sel, root) {
     return (root || document).querySelector(sel);
   }
   function qsa(sel, root) {
     return (root || document).querySelectorAll(sel);
   }
-  function isArray(x) {
-    return Object.prototype.toString.call(x) === "[object Array]";
-  }
   function safeNum(x) {
     var n = Number(x);
     return isFinite(n) ? n : 0;
   }
+  function isArray(x) {
+    return Object.prototype.toString.call(x) === "[object Array]";
+  }
 
   /* ======================================================
-     NAVIGATION WATCHER (Fixes “works then stops”)
-     - Triggers on full load, refresh, back/forward, PJAX
-  ====================================================== */
-  (function setupNavWatcher() {
-    function fire() {
-      window.dispatchEvent(new Event("sedjem:navigation"));
-    }
+     1) GLOBAL SWIPER PATCH (survives Zid navigation)
+     - Applies to ALL newly created swipers too
+     ====================================================== */
+  (function () {
+    if (window.__SEDJEM_SWIPER_PATCHED__) return;
+    window.__SEDJEM_SWIPER_PATCHED__ = true;
 
-    // Initial
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", fire, { once: true });
-    } else {
-      fire();
-    }
+    var HERO_MIN = 640;
+    var HERO_MAX = 1023;
 
-    // Refresh/back-forward cache
-    window.addEventListener("pageshow", fire);
-
-    // Patch history to catch PJAX navigation
-    if (!history.__sedjemPatched) {
-      history.__sedjemPatched = true;
-
-      var _push = history.pushState;
-      history.pushState = function () {
-        var r = _push.apply(this, arguments);
-        setTimeout(fire, 0);
-        return r;
-      };
-
-      var _replace = history.replaceState;
-      history.replaceState = function () {
-        var r = _replace.apply(this, arguments);
-        setTimeout(fire, 0);
-        return r;
-      };
-
-      window.addEventListener("popstate", function () {
-        setTimeout(fire, 0);
-      });
-    }
-  })();
-
-  /* ======================================================
-     START: HERO SLIDER FIX (Tablet 640–1023)
-  ====================================================== */
-  (function heroFix() {
-    var MIN = 640;
-    var MAX = 1023;
-
-    var SEL =
-      'section[section-id^="media-slider"] swiper-container,' +
-      'section[section-id^="media-slider"] swiper-container-1';
+    // Your Collections section-id
+    var COLLECTIONS_SECTION_ID = "slider-with-background-image-15e9c1d4-155b-4592-90c3-181634cf6d66";
 
     function inTablet() {
       var w = window.innerWidth || document.documentElement.clientWidth || 0;
-      return w >= MIN && w <= MAX;
+      return w >= HERO_MIN && w <= HERO_MAX;
     }
 
-    function patchBps(bps) {
+    function isHeroEl(el) {
+      if (!el) return false;
+      var sec = el.closest && el.closest('section[section-id^="media-slider"]');
+      return !!sec;
+    }
+
+    function isCollectionsEl(el) {
+      if (!el) return false;
+      var sec = el.closest && el.closest('section[section-id="' + COLLECTIONS_SECTION_ID + '"]');
+      return !!sec;
+    }
+
+    function patchBreakpoints(bps) {
       if (!bps) return;
       for (var k in bps) {
         if (!Object.prototype.hasOwnProperty.call(bps, k)) continue;
         var bp = Number(k);
         if (isNaN(bp)) continue;
-
-        if (bp <= 1023) {
+        if (bp <= HERO_MAX) {
           bps[k] = bps[k] || {};
           bps[k].slidesPerView = 1;
           bps[k].spaceBetween = 1;
         }
       }
-
-      bps[640] = bps[640] || {};
-      bps[640].slidesPerView = 1;
-      bps[640].spaceBetween = 1;
+      bps[HERO_MIN] = bps[HERO_MIN] || {};
+      bps[HERO_MIN].slidesPerView = 1;
+      bps[HERO_MIN].spaceBetween = 1;
     }
 
-    function patchSwiper(s) {
-      if (!s || s.destroyed) return;
+    function patchHero(swiper) {
+      if (!swiper) return;
       if (!inTablet()) return;
 
-      patchBps(s.params && s.params.breakpoints);
-      patchBps(s.originalParams && s.originalParams.breakpoints);
-
-      s.params.slidesPerView = 1;
-      s.params.spaceBetween = 1;
-
-      if (typeof s.setBreakpoint === "function") s.setBreakpoint();
-      if (typeof s.update === "function") s.update();
-    }
-
-    function tick() {
-      if (!inTablet()) return;
-
-      var els = qsa(SEL);
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        try {
-          if (!el.swiper && typeof el.initialize === "function") el.initialize();
-          if (el.swiper) patchSwiper(el.swiper);
-        } catch (e) {}
-      }
-    }
-
-    function runGuard() {
-      // retry for late init / re-render
-      var n = 0;
-      var iv = setInterval(function () {
-        tick();
-        if (++n >= 25) clearInterval(iv);
-      }, 150);
-    }
-
-    // Run on navigation + resize
-    window.addEventListener("sedjem:navigation", runGuard);
-    window.addEventListener("resize", function () {
-      setTimeout(runGuard, 180);
-    });
-
-    // Also watch DOM changes on home (PJAX inject)
-    if (window.MutationObserver && !heroFix.__mo) {
-      heroFix.__mo = true;
       try {
-        var mo = new MutationObserver(function () {
-          clearTimeout(heroFix.__t);
-          heroFix.__t = setTimeout(runGuard, 120);
-        });
-        mo.observe(document.documentElement, { childList: true, subtree: true });
+        patchBreakpoints(swiper.params && swiper.params.breakpoints);
+        patchBreakpoints(swiper.originalParams && swiper.originalParams.breakpoints);
+
+        swiper.params.slidesPerView = 1;
+        swiper.params.spaceBetween = 1;
+
+        if (typeof swiper.setBreakpoint === "function") swiper.setBreakpoint();
+        if (typeof swiper.update === "function") swiper.update();
       } catch (e) {}
     }
-  })();
 
-  /* ======================================================
-     START: COLLECTIONS SLIDER (Speed + Continuous Autoplay)
-  ====================================================== */
-  (function collectionsFix() {
-    var SECTION_ID = "slider-with-background-image-15e9c1d4-155b-4592-90c3-181634cf6d66";
-
-    function applyOnce() {
-      var section = qs('section[section-id="' + SECTION_ID + '"]');
-      if (!section) return false;
-
-      var el = section.querySelector("swiper-container, swiper-container-1");
-      if (!el) return false;
+    function patchCollections(swiper) {
+      if (!swiper) return;
 
       try {
+        swiper.params.speed = 5000;
+        swiper.params.autoplay = swiper.params.autoplay || {};
+        swiper.params.autoplay.delay = 0;
+        swiper.params.autoplay.disableOnInteraction = false;
+
+        if (typeof swiper.update === "function") swiper.update();
+        if (swiper.autoplay && typeof swiper.autoplay.start === "function") swiper.autoplay.start();
+      } catch (e) {}
+    }
+
+    function patchOne(el) {
+      try {
+        if (!el) return;
         if (!el.swiper && typeof el.initialize === "function") el.initialize();
         var s = el.swiper;
-        if (!s || s.destroyed) return false;
+        if (!s || s.destroyed) return;
 
-        s.params.speed = 5000;
-        s.params.autoplay = s.params.autoplay || {};
-        s.params.autoplay.delay = 0;
-        s.params.autoplay.disableOnInteraction = false;
+        // Avoid patching the same instance over and over
+        if (!s.__sedjemPatched) s.__sedjemPatched = {};
+        if (s.__sedjemPatched.hero && s.__sedjemPatched.collections) return;
 
-        if (typeof s.update === "function") s.update();
-        if (s.autoplay && typeof s.autoplay.start === "function") s.autoplay.start();
+        if (isHeroEl(el)) {
+          patchHero(s);
+          s.__sedjemPatched.hero = true;
+        }
 
-        return true;
-      } catch (e) {
-        return false;
-      }
+        if (isCollectionsEl(el)) {
+          patchCollections(s);
+          s.__sedjemPatched.collections = true;
+        }
+      } catch (e) {}
     }
 
-    function runGuard() {
-      var n = 0;
-      var iv = setInterval(function () {
-        applyOnce();
-        if (++n >= 25) clearInterval(iv);
-      }, 200);
+    function scan() {
+      var els = qsa("swiper-container, swiper-container-1");
+      for (var i = 0; i < els.length; i++) patchOne(els[i]);
     }
 
-    window.addEventListener("sedjem:navigation", runGuard);
+    // Constant light scan handles Zid destroying/recreating swipers on navigation
+    var iv = setInterval(scan, 200);
+    setTimeout(function () { clearInterval(iv); }, 60000); // keep 1 minute
 
-    if (window.MutationObserver && !collectionsFix.__mo) {
-      collectionsFix.__mo = true;
+    // Also re-scan on resize
+    window.addEventListener("resize", function () {
+      setTimeout(scan, 150);
+    });
+
+    // MutationObserver to catch new DOM injected
+    if (window.MutationObserver) {
       try {
         var mo = new MutationObserver(function () {
-          clearTimeout(collectionsFix.__t);
-          collectionsFix.__t = setTimeout(runGuard, 150);
+          clearTimeout(scan.__t);
+          scan.__t = setTimeout(scan, 120);
         });
         mo.observe(document.documentElement, { childList: true, subtree: true });
       } catch (e) {}
     }
+
+    // Kick immediately
+    scan();
   })();
 
   /* ======================================================
-     START: URGENCY / STOCK (Under SKU)
-  ====================================================== */
-  (function urgencyStock() {
+     2) URGENCY / STOCK under SKU (robust)
+     - Works even if zid SDK is missing
+     - Re-runs on navigation / DOM swaps
+     ====================================================== */
+  (function () {
+    if (window.__SEDJEM_STOCK_WIDGET__) return;
+    window.__SEDJEM_STOCK_WIDGET__ = true;
+
     var CFG = {
       boxId: "zid-urgency-stock",
       title: "المتبقي في المخزون",
@@ -225,104 +173,29 @@
       showOnlyWhenLow: true
     };
 
-    function isProductPage() {
-      // Zid product pages usually contain one of these
-      return !!(
-        document.getElementById("product-id") ||
-        document.getElementById("productPageDetails") ||
-        document.getElementById("product-form") ||
-        document.querySelector("[data-product-id]")
-      );
+    function ensureBox() {
+      var sku = qs(".div-product-sku");
+      if (!sku) return null;
+
+      var box = document.getElementById(CFG.boxId);
+      if (!box) {
+        box = document.createElement("div");
+        box.id = CFG.boxId;
+        box.className = "mt-4";
+        box.style.display = "none";
+        box.innerHTML = '<h4 class="product-title"></h4><div class="product-stock"></div>';
+        sku.insertAdjacentElement("afterend", box);
+      }
+      return box;
     }
 
     function getProductId() {
       var el = document.getElementById("product-id");
       if (el && el.value) return el.value;
 
-      // fallback: data-product-id
       var dp = document.querySelector("[data-product-id]");
       if (dp && dp.getAttribute("data-product-id")) return dp.getAttribute("data-product-id");
 
-      return null;
-    }
-
-    function findSkuBlock() {
-      return qs(".div-product-sku");
-    }
-
-    function ensureBox(skuBlock) {
-      var box = document.getElementById(CFG.boxId);
-      if (box) return box;
-
-      box = document.createElement("div");
-      box.id = CFG.boxId;
-      box.className = "mt-4";
-      box.style.display = "none";
-      box.innerHTML = '<h4 class="product-title"></h4><div class="product-stock"></div>';
-      skuBlock.insertAdjacentElement("afterend", box);
-      return box;
-    }
-
-    function showBox(box, qty) {
-      var q = Math.max(0, Math.floor(qty || 0));
-
-      if (q <= 0) {
-        box.style.display = "none";
-        return;
-      }
-
-      if (CFG.showOnlyWhenLow && q > CFG.threshold) {
-        box.style.display = "none";
-        return;
-      }
-
-      box.style.display = "";
-      var t = qs(".product-title", box);
-      var v = qs(".product-stock", box);
-      if (t) t.textContent = CFG.title;
-      if (v) v.textContent = q + (CFG.unit ? " " + CFG.unit : "");
-    }
-
-    function hideBox(box) {
-      if (box) box.style.display = "none";
-    }
-
-    // --- SDK path (if available)
-    function hasZidSDK() {
-      return !!(
-        window.zid &&
-        window.zid.store &&
-        window.zid.store.product &&
-        typeof window.zid.store.product.get === "function"
-      );
-    }
-
-    function sdkFetchQty(productId) {
-      return window.zid.store.product.get(productId).then(function (product) {
-        if (!product || !isArray(product.stocks)) return null;
-
-        // infinite => hide
-        for (var i = 0; i < product.stocks.length; i++) {
-          if (product.stocks[i] && product.stocks[i].is_infinite) return null;
-        }
-
-        var total = 0;
-        for (var j = 0; j < product.stocks.length; j++) {
-          if (product.stocks[j]) total += safeNum(product.stocks[j].available_quantity);
-        }
-        return total;
-      });
-    }
-
-    // --- Fallback path (productObj/selectedProduct)
-    function getSelectedProduct() {
-      if (window.selectedProduct) return window.selectedProduct;
-      if (window.selected_product) return window.selected_product;
-
-      if (window.productObj) {
-        if (window.productObj.selected_product) return window.productObj.selected_product;
-        if (window.productObj.selectedProduct) return window.productObj.selectedProduct;
-      }
       return null;
     }
 
@@ -341,11 +214,14 @@
     }
 
     function fallbackQty() {
-      var selected = getSelectedProduct();
-      if (selected && isArray(selected.stocks)) return computeFromStocks(selected.stocks);
+      // 1) selected product
+      var sp = window.selectedProduct || window.selected_product;
+      if (sp && isArray(sp.stocks)) return computeFromStocks(sp.stocks);
 
+      // 2) productObj root
       if (window.productObj && isArray(window.productObj.stocks)) return computeFromStocks(window.productObj.stocks);
 
+      // 3) match variant/group by #product-id
       var pid = getProductId();
       if (pid && window.productObj && isArray(window.productObj.products)) {
         for (var i = 0; i < window.productObj.products.length; i++) {
@@ -359,64 +235,86 @@
       return null;
     }
 
-    // --- Core render (safe)
+    function hasZidSDK() {
+      return !!(
+        window.zid &&
+        window.zid.store &&
+        window.zid.store.product &&
+        typeof window.zid.store.product.get === "function"
+      );
+    }
+
+    function sdkFetchQty(productId) {
+      return window.zid.store.product.get(productId).then(function (product) {
+        if (!product || !isArray(product.stocks)) return null;
+        return computeFromStocks(product.stocks);
+      });
+    }
+
+    function renderWithQty(box, qty) {
+      var q = Math.max(0, Math.floor(qty || 0));
+
+      if (!q) {
+        box.style.display = "none";
+        return;
+      }
+
+      if (CFG.showOnlyWhenLow && q > CFG.threshold) {
+        box.style.display = "none";
+        return;
+      }
+
+      box.style.display = "";
+      qs(".product-title", box).textContent = CFG.title;
+      qs(".product-stock", box).textContent = q + (CFG.unit ? " " + CFG.unit : "");
+    }
+
     function render() {
-      if (!isProductPage()) return;
+      var box = ensureBox();
+      if (!box) return;
 
-      var skuBlock = findSkuBlock();
-      var productId = getProductId();
-      if (!skuBlock || !productId) return;
+      var pid = getProductId();
+      if (!pid) {
+        box.style.display = "none";
+        return;
+      }
 
-      var box = ensureBox(skuBlock);
-
-      // SDK first, fallback second
+      // SDK first
       if (hasZidSDK()) {
-        sdkFetchQty(productId)
+        sdkFetchQty(pid)
           .then(function (qty) {
-            if (qty === null || qty === undefined) return hideBox(box);
-            showBox(box, qty);
+            if (qty === null || qty === undefined) {
+              var q2 = fallbackQty();
+              if (q2 === null || q2 === undefined) return (box.style.display = "none");
+              return renderWithQty(box, q2);
+            }
+            renderWithQty(box, qty);
           })
           .catch(function () {
-            var q2 = fallbackQty();
-            if (q2 === null || q2 === undefined) return hideBox(box);
-            showBox(box, q2);
+            var qf = fallbackQty();
+            if (qf === null || qf === undefined) return (box.style.display = "none");
+            renderWithQty(box, qf);
           });
 
         return;
       }
 
-      var qf = fallbackQty();
-      if (qf === null || qf === undefined) return hideBox(box);
-      showBox(box, qf);
+      // fallback only
+      var q = fallbackQty();
+      if (q === null || q === undefined) return (box.style.display = "none");
+      renderWithQty(box, q);
     }
 
-    // schedule with retries because Zid renders SKU late
     function runGuard() {
-      if (!isProductPage()) return;
-
-      var n = 0;
+      var tries = 0;
       var iv = setInterval(function () {
+        tries++;
         render();
-        if (++n >= 25) clearInterval(iv);
+        if (tries >= 25) clearInterval(iv);
       }, 250);
     }
 
-    // Re-run on navigation
-    window.addEventListener("sedjem:navigation", runGuard);
-
-    // Watch DOM changes on product page to catch late SKU/variant swaps
-    if (window.MutationObserver && !urgencyStock.__mo) {
-      urgencyStock.__mo = true;
-      try {
-        var mo = new MutationObserver(function () {
-          clearTimeout(urgencyStock.__t);
-          urgencyStock.__t = setTimeout(runGuard, 150);
-        });
-        mo.observe(document.documentElement, { childList: true, subtree: true });
-      } catch (e) {}
-    }
-
-    // Hook variant change functions if they exist
+    // Hook common variant functions
     function wrap(fnName) {
       if (typeof window[fnName] !== "function" || window[fnName].__sedjemWrapped) return;
       var old = window[fnName];
@@ -430,14 +328,33 @@
     wrap("productOptionsChanged");
     wrap("productOptionInputChanged");
 
-    // Debug helper (this time guaranteed to exist)
+    // Re-run frequently because Zid can swap product DOM on variant changes
+    setInterval(function () {
+      // Only if SKU exists (i.e., product page)
+      if (document.querySelector(".div-product-sku")) runGuard();
+    }, 1200);
+
+    // Observe DOM
+    if (window.MutationObserver) {
+      try {
+        var mo = new MutationObserver(function () {
+          clearTimeout(runGuard.__t);
+          runGuard.__t = setTimeout(runGuard, 150);
+        });
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+      } catch (e) {}
+    }
+
+    // Debug helper
     window.__zidDebugStock = function () {
-      console.log("[Stock] isProductPage:", isProductPage());
       console.log("[Stock] productId:", getProductId());
       console.log("[Stock] hasZidSDK:", hasZidSDK());
-      console.log("[Stock] selectedProduct:", getSelectedProduct());
+      console.log("[Stock] selectedProduct:", window.selectedProduct || window.selected_product);
       console.log("[Stock] productObj:", window.productObj);
       runGuard();
     };
+
+    // Kick
+    runGuard();
   })();
 })();
