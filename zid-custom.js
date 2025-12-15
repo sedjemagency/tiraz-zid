@@ -1,39 +1,44 @@
-/* Sedjem Zid Custom Bundle (robust init) */
+/* Sedjem Zid Custom Bundle */
 (function () {
   if (window.__SEDJEM_ZID_CUSTOM_BUNDLE__) return;
   window.__SEDJEM_ZID_CUSTOM_BUNDLE__ = "loaded_" + Date.now();
 
-  // Runs fn now and also on future DOM changes (for Zid/PJAX/late sections)
-  function watch(run) {
-    run();
-    var mo = new MutationObserver(function () { run(); });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
+  // ---------- helpers ----------
+  function qsa(sel, root) { return (root || document).querySelectorAll(sel); }
+  function inRange(min, max) {
+    var w = window.innerWidth || document.documentElement.clientWidth || 0;
+    return w >= min && w <= max;
   }
 
-  // Safe: initialize swiper-container element if needed
   function ensureSwiper(el) {
     try {
       if (!el) return null;
       if (!el.swiper && typeof el.initialize === "function") el.initialize();
       return el.swiper || null;
-    } catch (e) {
-      return null;
-    }
+    } catch (_) { return null; }
   }
 
-  // =========
-  // HERO FIX
-  // =========
+  function watch(run) {
+    run();
+    // rerun when Zid injects/changes sections
+    var mo = new MutationObserver(function () { run(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  function retry(run, ms, times) {
+    var i = 0;
+    var iv = setInterval(function () {
+      run();
+      if (++i >= times) clearInterval(iv);
+    }, ms);
+  }
+
+  // ---------- HERO (640–1023) ----------
   (function () {
     var MIN = 640, MAX = 1023;
     var SEL =
       'section[section-id^="media-slider"] swiper-container,' +
       'section[section-id^="media-slider"] swiper-container-1';
-
-    function inTablet() {
-      var w = window.innerWidth || document.documentElement.clientWidth || 0;
-      return w >= MIN && w <= MAX;
-    }
 
     function patchBps(bps) {
       if (!bps) return;
@@ -53,7 +58,8 @@
     }
 
     function patchSwiper(s) {
-      if (!s || s.destroyed || !inTablet()) return;
+      if (!s || s.destroyed) return;
+      if (!inRange(MIN, MAX)) return;
 
       patchBps(s.params && s.params.breakpoints);
       patchBps(s.originalParams && s.originalParams.breakpoints);
@@ -66,51 +72,20 @@
     }
 
     function run() {
-      if (!inTablet()) return;
+      if (!inRange(MIN, MAX)) return;
 
-      var els = document.querySelectorAll(SEL);
+      var els = qsa(SEL);
       for (var i = 0; i < els.length; i++) {
         var s = ensureSwiper(els[i]);
         if (s) patchSwiper(s);
       }
     }
 
-    // Run on load + resize + DOM mutations (covers refresh timing + late init)
-    window.addEventListener("pageshow", run);
-    window.addEventListener("load", run);
-    window.addEventListener("resize", function () { setTimeout(run, 150); });
-    watch(function () { setTimeout(run, 50); });
+    // run immediately + keep reapplying (covers refresh + late init)
+    window.addEventListener("pageshow", function () { retry(run, 150, 25); });
+    window.addEventListener("load", function () { retry(run, 150, 25); });
+    window.addEventListener("resize", function () { retry(run, 150, 10); });
+    watch(function () { retry(run, 150, 10); });
   })();
 
-  // ==========================
-  // COLLECTIONS SPEED / AUTOPLAY
-  // ==========================
-  (function () {
-    var SECTION_ID = "slider-with-background-image-15e9c1d4-155b-4592-90c3-181634cf6d66";
-
-    function apply() {
-      var section = document.querySelector('section[section-id="' + SECTION_ID + '"]');
-      if (!section) return;
-
-      var el =
-        section.querySelector("swiper-container") ||
-        section.querySelector("swiper-container-1");
-      if (!el) return;
-
-      var s = ensureSwiper(el);
-      if (!s || s.destroyed) return;
-
-      s.params.speed = 5000;
-      s.params.autoplay = s.params.autoplay || {};
-      s.params.autoplay.delay = 0;
-      s.params.autoplay.disableOnInteraction = false;
-
-      if (typeof s.update === "function") s.update();
-      if (s.autoplay && typeof s.autoplay.start === "function") s.autoplay.start();
-    }
-
-    window.addEventListener("pageshow", apply);
-    window.addEventListener("load", apply);
-    watch(function () { setTimeout(apply, 50); });
-  })();
 })();
