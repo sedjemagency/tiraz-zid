@@ -138,14 +138,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 /* ======================================================
-   START: URGENCY / STOCK (Zid Product Page)
-   - Position: Under "رمز المنتج"
-   - Title: "الكمية المتوفرة"
-   - Value: number only
+   START: URGENCY / STOCK (Zid – API Based)
+   Position: Under "رمز المنتج"
    ====================================================== */
 (function () {
-  if (window.__ZID_URGENCY_STOCK_FINAL__) return;
-  window.__ZID_URGENCY_STOCK_FINAL__ = Date.now();
+  if (window.__ZID_URGENCY_STOCK_API__) return;
+  window.__ZID_URGENCY_STOCK_API__ = true;
 
   var BOX_ID = "zid-urgency-stock";
   var TITLE_TEXT = "الكمية المتوفرة";
@@ -153,106 +151,21 @@ document.addEventListener("DOMContentLoaded", function () {
   function qs(sel, root) {
     return (root || document).querySelector(sel);
   }
-  function qsa(sel, root) {
-    return Array.prototype.slice.call((root || document).querySelectorAll(sel));
-  }
-
-  function isProductPage() {
-    return !!(
-      document.getElementById("productPageDetails") ||
-      document.getElementById("product-form") ||
-      document.getElementById("product-id") ||
-      document.querySelector('[data-page="product"]')
-    );
-  }
 
   function findSkuBlock() {
-    var el = qs(".div-product-sku");
-    if (el) return el;
-
-    var titles = qsa("h4.product-title");
-    for (var i = 0; i < titles.length; i++) {
-      if ((titles[i].textContent || "").includes("رمز المنتج")) {
-        return titles[i].parentElement;
-      }
-    }
-    return null;
+    return qs(".div-product-sku");
   }
 
-  function getValueClassFromSkuBlock(skuBlock) {
-    var v =
-      (skuBlock && qs(".product-sku", skuBlock)) ||
-      (skuBlock && qs(".product-weight", skuBlock));
-    return v && v.className ? v.className : "product-sku";
-  }
-
-  function toNumber(x) {
-    var n = Number(x);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function sumStocks(stocks) {
-    if (!Array.isArray(stocks) || !stocks.length) return null;
-
-    for (var i = 0; i < stocks.length; i++) {
-      if (stocks[i] && stocks[i].is_infinite === true) return null;
-    }
-
-    var total = 0;
-    var hasAny = false;
-    for (var j = 0; j < stocks.length; j++) {
-      var aq = toNumber(stocks[j] && stocks[j].available_quantity);
-      if (aq !== null) {
-        total += aq;
-        hasAny = true;
-      }
-    }
-    return hasAny ? total : null;
-  }
-
-  function getSelectedProduct() {
-    return (
-      window.current_selected_product ||
-      window.selectedProduct ||
-      window.selected_product ||
-      (window.productObj &&
-        (window.productObj.selected_product ||
-          window.productObj.selectedProduct)) ||
-      null
-    );
-  }
-
-  function getAvailableQty() {
-    var p = getSelectedProduct();
-
-    if (p && Array.isArray(p.stocks)) {
-      var q1 = sumStocks(p.stocks);
-      if (q1 !== null) return q1;
-    }
-
-    if (p && p.is_infinite !== true) {
-      var q2 = toNumber(p.quantity);
-      if (q2 !== null) return q2;
-    }
-
-    if (window.productObj && Array.isArray(window.productObj.stocks)) {
-      var q3 = sumStocks(window.productObj.stocks);
-      if (q3 !== null) return q3;
-    }
-
-    if (window.productObj && window.productObj.is_infinite !== true) {
-      var q4 = toNumber(window.productObj.quantity);
-      if (q4 !== null) return q4;
-    }
-
-    return null;
+  function getProductId() {
+    var el = qs("#product-id");
+    return el && el.value ? el.value : null;
   }
 
   function ensureBox(skuBlock) {
     var box = document.getElementById(BOX_ID);
     if (box) return box;
 
-    var valueClass = getValueClassFromSkuBlock(skuBlock);
+    var valueClass = "product-sku";
 
     box = document.createElement("div");
     box.id = BOX_ID;
@@ -265,36 +178,68 @@ document.addEventListener("DOMContentLoaded", function () {
     return box;
   }
 
+  function fetchStock(productId) {
+    return fetch("/api/v1/products/" + productId, {
+      credentials: "same-origin"
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("API error");
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data || !Array.isArray(data.stocks)) return null;
+
+        var total = 0;
+        for (var i = 0; i < data.stocks.length; i++) {
+          var s = data.stocks[i];
+          if (!s) continue;
+          if (s.is_infinite === true) return null;
+          if (typeof s.available_quantity === "number") {
+            total += s.available_quantity;
+          }
+        }
+        return total > 0 ? total : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
   function render() {
     var skuBlock = findSkuBlock();
     if (!skuBlock) return;
 
-    var qty = getAvailableQty();
-    if (qty === null || qty <= 0) return;
+    var productId = getProductId();
+    if (!productId) return;
 
     var box = ensureBox(skuBlock);
 
-    box.querySelector(".product-title").textContent = TITLE_TEXT;
-    box.querySelector("div").textContent = String(Math.floor(qty));
-    box.style.display = "";
+    fetchStock(productId).then(function (qty) {
+      if (!qty) {
+        box.style.display = "none";
+        return;
+      }
+
+      box.style.display = "";
+      box.querySelector(".product-title").textContent = TITLE_TEXT;
+      box.querySelector("div").textContent = qty;
+    });
   }
 
   function start() {
-    if (!isProductPage()) return;
-
     var tries = 0;
     var iv = setInterval(function () {
       tries++;
-      try { render(); } catch (e) {}
-      if (tries > 160) clearInterval(iv);
-    }, 250);
+      render();
+      if (tries > 30) clearInterval(iv);
+    }, 300);
 
-    if (typeof window.productOptionsChanged === "function") {
-      var old = window.productOptionsChanged;
-      window.productOptionsChanged = function () {
-        var r = old.apply(this, arguments);
-        setTimeout(render, 200);
-        return r;
+    // Re-render on variant change
+    if (typeof window.productOptionInputChanged === "function") {
+      var old = window.productOptionInputChanged;
+      window.productOptionInputChanged = function () {
+        old.apply(this, arguments);
+        setTimeout(render, 300);
       };
     }
   }
