@@ -128,60 +128,98 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 
 // ==========================
-// Zid Product Remaining Stock (No HTML access)
-// Injects a block under ".div-product-sku"
+// Urgency / Stock (Zid) — FINAL
+// Inserts تحت "رمز المنتج" بنفس ستايل باقي الحقول
+// Title: "الكمية المتوفرة"
+// Value: number only (no unit)
 // ==========================
 (function () {
-  var CFG = {
-    threshold: 5,          // Show only if remaining <= threshold
-    showOnlyWhenLow: true, // Set false to always show finite stock
-    title: "المتبقي في المخزون",
-    unit: "قطعة"
-  };
+  if (window.__ZID_URGENCY_STOCK_FINAL__) return;
+  window.__ZID_URGENCY_STOCK_FINAL__ = Date.now();
 
-  function $(sel, root) {
+  var BOX_ID = "zid-urgency-stock";
+  var TITLE_TEXT = "الكمية المتوفرة";
+
+  function qs(sel, root) {
     return (root || document).querySelector(sel);
   }
-
-  function isArray(x) {
-    return Object.prototype.toString.call(x) === "[object Array]";
+  function qsa(sel, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(sel));
   }
 
   function isProductPage() {
     return !!(
-      document.getElementById("product-form") ||
       document.getElementById("productPageDetails") ||
-      document.getElementById("product-id")
+      document.getElementById("product-form") ||
+      document.getElementById("product-id") ||
+      document.querySelector('[data-page="product"]')
     );
   }
 
-  function safeNum(x) {
-    if (typeof x === "number" && isFinite(x)) return x;
-    if (typeof x === "string") {
-      var n = Number(x);
-      if (isFinite(n)) return n;
-    }
-    return 0;
-  }
+  function findSkuBlock() {
+    // Primary (most themes)
+    var el = qs(".div-product-sku");
+    if (el) return el;
 
-  function computeFromStocks(stocks) {
-    if (!isArray(stocks) || !stocks.length) return null;
-
-    for (var i = 0; i < stocks.length; i++) {
-      if (stocks[i] && stocks[i].is_infinite) {
-        return { infinite: true, qty: null };
+    // Fallback: find title text "رمز المنتج"
+    var titles = qsa("h4.product-title");
+    for (var i = 0; i < titles.length; i++) {
+      var t = (titles[i].textContent || "").trim();
+      if (t.indexOf("رمز المنتج") !== -1) {
+        // Usually the container is the parent block that holds title + value
+        return titles[i].parentElement || null;
       }
     }
+    return null;
+  }
 
-    var sum = 0;
-    for (var j = 0; j < stocks.length; j++) {
-      if (stocks[j]) sum += safeNum(stocks[j].available_quantity);
+  function getValueClassFromSkuBlock(skuBlock) {
+    // Keep the same styling as SKU value (or weight value as fallback)
+    var v =
+      (skuBlock && qs(".product-sku", skuBlock)) ||
+      (skuBlock && qs(".product-weight", skuBlock));
+
+    if (v && v.className) return v.className;
+    return "product-sku";
+  }
+
+  function toNumber(x) {
+    if (x === null || typeof x === "undefined") return null;
+    var n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function sumStocks(stocks) {
+    if (!Array.isArray(stocks) || !stocks.length) return null;
+
+    // If any stock is infinite/unknown -> do not display qty
+    for (var i = 0; i < stocks.length; i++) {
+      var s = stocks[i];
+      if (!s) continue;
+
+      if (s.is_infinite === true) return null;
+      if (s.available_quantity === null || typeof s.available_quantity === "undefined") return null;
     }
 
-    return { infinite: false, qty: sum };
+    var total = 0;
+    var hasAny = false;
+    for (var j = 0; j < stocks.length; j++) {
+      var st = stocks[j];
+      if (!st) continue;
+
+      var aq = toNumber(st.available_quantity);
+      if (aq === null) continue;
+
+      total += aq;
+      hasAny = true;
+    }
+
+    return hasAny ? total : null;
   }
 
   function getSelectedProduct() {
+    // Common globals in Zid themes
+    if (window.current_selected_product) return window.current_selected_product;
     if (window.selectedProduct) return window.selectedProduct;
     if (window.selected_product) return window.selected_product;
 
@@ -189,163 +227,155 @@ document.addEventListener("DOMContentLoaded", function () {
       if (window.productObj.selected_product) return window.productObj.selected_product;
       if (window.productObj.selectedProduct) return window.productObj.selectedProduct;
     }
-
     return null;
   }
 
-  function getStocksInfo(selected) {
-    var info = null;
-
-    // 1) selectedProduct.stocks
-    if (selected && isArray(selected.stocks)) {
-      info = computeFromStocks(selected.stocks);
-      if (info) return info;
-    }
-
-    // 2) productObj.stocks
-    if (window.productObj && isArray(window.productObj.stocks)) {
-      info = computeFromStocks(window.productObj.stocks);
-      if (info) return info;
-    }
-
-    // 3) Match product-id with productObj.products[*].stocks
-    var pidEl = document.getElementById("product-id");
-    var pid = pidEl ? pidEl.value : null;
-
-    if (pid && window.productObj && isArray(window.productObj.products)) {
-      for (var i = 0; i < window.productObj.products.length; i++) {
-        var p = window.productObj.products[i];
-        if (p && String(p.id) === String(pid) && isArray(p.stocks)) {
-          info = computeFromStocks(p.stocks);
-          if (info) return info;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function ensureNode() {
-    var skuContainer = $(".div-product-sku");
-    if (!skuContainer) return null;
-
-    var node = document.getElementById("zid-stock-remaining");
-    if (!node) {
-      node = document.createElement("div");
-      node.id = "zid-stock-remaining";
-      node.className = "div-product-stock mt-4 hidden";
-      node.innerHTML = '<h4 class="product-title"></h4><div class="product-stock"></div>';
-      skuContainer.insertAdjacentElement("afterend", node);
-    }
-    return node;
-  }
-
-  function update(selected) {
-    var node = ensureNode();
-    if (!node) return false;
-
-    selected = selected || getSelectedProduct();
-
-    // Hide if unavailable/out of stock
-    var unavailable = false;
-    if (selected && (selected.unavailable || selected.out_of_stock)) unavailable = true;
-    if (window.productObj && (window.productObj.unavailable || window.productObj.out_of_stock)) unavailable = true;
-    if (unavailable) {
-      node.classList.add("hidden");
-      return true;
-    }
-
-    var info = getStocksInfo(selected);
-    if (!info || info.infinite || info.qty === null) {
-      node.classList.add("hidden");
-      return true;
-    }
-
-    var qty = Math.max(0, Math.floor(info.qty));
-
-    if (CFG.showOnlyWhenLow && qty > CFG.threshold) {
-      node.classList.add("hidden");
-      return true;
-    }
-
-    node.classList.remove("hidden");
-    node.setAttribute("data-level", qty <= 2 ? "critical" : "low");
-
-    var titleEl = $(".product-title", node);
-    var valEl = $(".product-stock", node);
-
-    if (titleEl) titleEl.textContent = CFG.title;
-    if (valEl) valEl.textContent = qty + (CFG.unit ? (" " + CFG.unit) : "");
-
-    return true;
-  }
-
-  var rafPending = false;
-  function scheduleUpdate(selected) {
-    if (rafPending) return;
-    rafPending = true;
-
-    (window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); })(function () {
-      rafPending = false;
-      update(selected);
-    });
-  }
-
-  // Debug helper
-  window.__zidDebugStock = function () {
+  function getAvailableQty() {
     var selected = getSelectedProduct();
-    var info = getStocksInfo(selected);
 
-    console.log("[Zid Stock] selectedProduct:", selected);
-    console.log("[Zid Stock] productObj.stocks:", window.productObj ? window.productObj.stocks : undefined);
-    console.log("[Zid Stock] computed:", info);
-    console.log("[Zid Stock] skuEl:", document.querySelector(".div-product-sku"));
-    console.log("[Zid Stock] node:", document.getElementById("zid-stock-remaining"));
-
-    scheduleUpdate(selected);
-    return info;
-  };
-
-  function hookVariantChanges() {
-    if (typeof window.productOptionsChanged === "function" && !window.productOptionsChanged.__zidWrapped) {
-      var oldFn = window.productOptionsChanged;
-      window.productOptionsChanged = function (selectedProduct) {
-        var res = oldFn.apply(this, arguments);
-        scheduleUpdate(selectedProduct);
-        return res;
-      };
-      window.productOptionsChanged.__zidWrapped = true;
+    // 1) selected.stocks
+    if (selected && Array.isArray(selected.stocks)) {
+      var q1 = sumStocks(selected.stocks);
+      if (q1 !== null) return q1;
     }
 
-    var pid = document.getElementById("product-id");
-    if (pid && window.MutationObserver) {
-      try {
-        var obs = new MutationObserver(function () { scheduleUpdate(); });
-        obs.observe(pid, { attributes: true, attributeFilter: ["value"] });
-      } catch (e) {}
-      pid.addEventListener("change", function () { scheduleUpdate(); });
+    // 2) selected.quantity (if finite)
+    if (selected) {
+      if (selected.is_infinite === true) return null;
+      var q2 = toNumber(selected.quantity);
+      if (q2 !== null) return q2;
     }
+
+    // 3) productObj.stocks (your theme often has it here)
+    if (window.productObj && Array.isArray(window.productObj.stocks)) {
+      var q3 = sumStocks(window.productObj.stocks);
+      if (q3 !== null) return q3;
+    }
+
+    // 4) productObj.quantity (finite)
+    if (window.productObj) {
+      if (window.productObj.is_infinite === true) return null;
+      var q4 = toNumber(window.productObj.quantity);
+      if (q4 !== null) return q4;
+    }
+
+    return null;
+  }
+
+  function ensureBox(skuBlock) {
+    var box = document.getElementById(BOX_ID);
+    if (box) return box;
+
+    var valueClass = getValueClassFromSkuBlock(skuBlock);
+
+    box = document.createElement("div");
+    box.id = BOX_ID;
+
+    // Copy spacing style (mt-4) like other fields
+    var cls = (skuBlock && skuBlock.className) ? skuBlock.className : "mt-4";
+    // Avoid duplicating div-product-sku class name (not required, but safe)
+    cls = cls.replace(/\bdiv-product-sku\b/g, "").trim();
+    if (!cls) cls = "mt-4";
+
+    box.className = cls;
+    box.innerHTML =
+      '<h4 class="product-title"></h4>' +
+      '<div class="' + valueClass + '"></div>';
+
+    skuBlock.insertAdjacentElement("afterend", box);
+    return box;
+  }
+
+  function render() {
+    var skuBlock = findSkuBlock();
+    if (!skuBlock) return false;
+
+    var box = ensureBox(skuBlock);
+
+    // Keep it directly under SKU (DOM can re-render)
+    if (box.previousElementSibling !== skuBlock) {
+      skuBlock.insertAdjacentElement("afterend", box);
+    }
+
+    var qty = getAvailableQty();
+
+    // If qty is not available or infinite -> hide
+    if (qty === null) {
+      box.style.display = "none";
+      return true;
+    }
+
+    qty = Math.max(0, Math.floor(qty));
+
+    // Out of stock -> hide (store usually shows out-of-stock state)
+    if (qty <= 0) {
+      box.style.display = "none";
+      return true;
+    }
+
+    var titleEl = qs(".product-title", box);
+    var valueEl = box.querySelector("div");
+
+    if (titleEl) titleEl.textContent = TITLE_TEXT;
+    if (valueEl) valueEl.textContent = String(qty);
+
+    box.style.display = "";
+    return true;
   }
 
   function start() {
     if (!isProductPage()) return;
 
-    hookVariantChanges();
+    // Try for a long time (Zid can load productObj + blocks late)
+    var tries = 0;
+    var iv = setInterval(function () {
+      tries++;
+      try { render(); } catch (e) {}
+      if (tries >= 160) clearInterval(iv); // ~40s
+    }, 250);
 
-    // SKU block may render late
-    if (window.MutationObserver) {
-      var root = document.getElementById("productPageDetails") || document.body;
-      if (root) {
-        var obs2 = new MutationObserver(function () {
-          if (document.querySelector(".div-product-sku")) scheduleUpdate();
-        });
-        obs2.observe(root, { childList: true, subtree: true });
-      }
+    // Hook variant changes if theme uses productOptionsChanged
+    if (typeof window.productOptionsChanged === "function" && !window.productOptionsChanged.__urgencyStockWrapped) {
+      var old = window.productOptionsChanged;
+      window.productOptionsChanged = function () {
+        var res = old.apply(this, arguments);
+        try { render(); } catch (e) {}
+        return res;
+      };
+      window.productOptionsChanged.__urgencyStockWrapped = true;
     }
 
-    scheduleUpdate();
-    setTimeout(function () { scheduleUpdate(); }, 500);
-    setTimeout(function () { scheduleUpdate(); }, 1500);
+    // Update on any changes in the product form
+    var form = document.getElementById("product-form") || qs('form[id*="product"]');
+    if (form) {
+      var t;
+      form.addEventListener("change", function () {
+        clearTimeout(t);
+        t = setTimeout(function () { try { render(); } catch (e) {} }, 120);
+      }, true);
+    }
+
+    // Observe DOM re-renders
+    if (window.MutationObserver) {
+      var root = document.getElementById("productPageDetails") || document.body;
+      try {
+        var mo = new MutationObserver(function () {
+          try { render(); } catch (e) {}
+        });
+        mo.observe(root, { childList: true, subtree: true });
+      } catch (e) {}
+    }
+
+    // Debug helper
+    window.__zidUrgencyStockDebug = function () {
+      console.log("[UrgencyStock] skuBlock:", findSkuBlock());
+      console.log("[UrgencyStock] productObj:", window.productObj);
+      console.log("[UrgencyStock] selected:", getSelectedProduct());
+      console.log("[UrgencyStock] qty:", getAvailableQty());
+      console.log("[UrgencyStock] node:", document.getElementById(BOX_ID));
+      try { render(); } catch (e) {}
+      return getAvailableQty();
+    };
   }
 
   if (document.readyState === "loading") {
